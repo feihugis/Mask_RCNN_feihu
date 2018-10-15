@@ -3,7 +3,7 @@ import os
 import numpy as np
 from pathlib import Path
 from shutil import copyfile
-files = [str(f) for f in Path("/Users/fei/Documents/Github/Mask_RCNN/samples/nucleus/datasets/stage3_test/").glob('**/*.png')]
+
 
 def reorganize_mitosis_images(input_dir, output_dir):
     input_files = [str(f) for f in Path(input_dir).glob('**/*.tif')]
@@ -11,9 +11,9 @@ def reorganize_mitosis_images(input_dir, output_dir):
         file_basename = os.path.basename(file).split('.')[0]
         parent_dir = os.path.dirname(file)
         dir_basename = os.path.basename(parent_dir)
-        new_dir = os.path.join(output_dir, "{}_{}".format(dir_basename, file_basename), 'images')
+        new_dir = os.path.join(output_dir, "{}-{}".format(dir_basename, file_basename), 'images')
         os.makedirs(new_dir, exist_ok=True)
-        copyfile(file, os.path.join(new_dir, "{}.tif".format(file_basename)))
+        copyfile(file, os.path.join(new_dir, "{}-{}.tif".format(dir_basename, file_basename)))
         print(file_basename, dir_basename)
 
 def crop_image(input_imgs, output_dir, size=128):
@@ -78,11 +78,10 @@ def combine_images(input_dir, output_dir, size=128):
                     0:combined_file_size[basename][0],
                     0:combined_file_size[basename][1], :])
 
-input_images = ['/Users/fei/Documents/Github/deep-histopath/data/mitosis/mitoses_train_image_data/01/01.tif']
-output_dir = '/Users/fei/Documents/Github/Mask_RCNN/samples/nucleus/datasets/stage1_test/'
-input_dir = '/Users/fei/Documents/Github/Mask_RCNN/results/nucleus/submit_20181014T114534'
-#crop_image(input_images, output_dir)
+mitosis_input_dir = '../../../../deep-histopath/data/mitosis/mitoses_train_image_data/'
+mitosis_reorganized_dir = '../../../../deep-histopath/data/mitosis/mitoses_train_image_data_new/'
+reorganize_mitosis_images(mitosis_input_dir, mitosis_reorganized_dir)
+mitosis_files = [str(f) for f in Path(mitosis_reorganized_dir).glob('**/**/*.tif')]
+inference_dir = '/Users/fei/Documents/Github/Mask_RCNN/samples/nucleus/datasets/stage1_test'
+crop_image(mitosis_files, inference_dir)
 #combine_images(input_dir, '/Users/fei/Documents/Github/Mask_RCNN/samples/nucleus/datasets/stage1_combine_test/')
-
-reorganize_mitosis_images('/Users/fei/Documents/Github/deep-histopath/data/mitosis/mitoses_train_image_data/',
-                '/Users/fei/Documents/Github/deep-histopath/data/mitosis/mitoses_train_image_data_new/')
