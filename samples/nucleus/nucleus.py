@@ -38,6 +38,7 @@ if __name__ == '__main__':
 import os
 import sys
 import json
+import cv2
 import datetime
 import numpy as np
 import skimage.io
@@ -386,12 +387,14 @@ def detect(model, dataset_dir, subset):
         rle = mask_to_rle(source_id, r["masks"], r["scores"])
         submission.append(rle)
         # Save image with masks
-        visualize.display_instances(
+        image_cv = visualize.visualize_instances(
             image, r['rois'], r['masks'], r['class_ids'],
             dataset.class_names, r['scores'],
             show_bbox=False, show_mask=False,
             title="Predictions")
-        plt.savefig("{}/{}.png".format(submit_dir, dataset.image_info[image_id]["id"]))
+        #plt.savefig("{}/{}.png".format(submit_dir, dataset.image_info[image_id]["id"]), pad_inches=0)
+        cv2.imwrite("{}/{}.png".format(submit_dir, dataset.image_info[image_id]["id"]), image_cv)
+
 
     # Save to csv file
     submission = "ImageId,EncodedPixels\n" + "\n".join(submission)
