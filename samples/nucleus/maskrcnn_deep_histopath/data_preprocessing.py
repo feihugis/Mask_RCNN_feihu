@@ -78,10 +78,10 @@ def combine_images(input_dir, output_dir, size=128):
                     0:combined_file_size[basename][0],
                     0:combined_file_size[basename][1], :])
 
-mitosis_input_dir = '../../../../deep-histopath/data/mitosis/mitoses_train_image_data/'
-mitosis_reorganized_dir = '../../../../deep-histopath/data/mitosis/mitoses_train_image_data_new/'
+mitosis_input_dir = '../deep-histopath/data/mitosis/mitoses_train_image_data/'
+mitosis_reorganized_dir = '../deep-histopath/data/mitosis/mitoses_train_image_data_new/'
 reorganize_mitosis_images(mitosis_input_dir, mitosis_reorganized_dir)
 mitosis_files = [str(f) for f in Path(mitosis_reorganized_dir).glob('**/**/*.tif')]
-inference_dir = '/Users/fei/Documents/Github/Mask_RCNN/samples/nucleus/datasets/stage1_test'
+inference_dir = 'samples/nucleus/datasets/stage1_test'
 crop_image(mitosis_files, inference_dir)
 #combine_images(input_dir, '/Users/fei/Documents/Github/Mask_RCNN/samples/nucleus/datasets/stage1_combine_test/')
