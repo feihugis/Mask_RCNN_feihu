@@ -34,16 +34,16 @@ def crop_image(input_imgs, output_dir, size=128, overlap=0):
         img = cv2.imread(input_img)
 
         h, w, c = img.shape
-        y = overlap
+        y = 0
         while (y < h):
-            y1 = y - overlap
+            y1 = y
             y2 = y1 + size
             if (y2 > h):
                 y2 = h
                 y1 = h - size
-            x = overlap
+            x = 0
             while (x < w):
-                x1 = x - overlap
+                x1 = x
                 x2 = x1 + size
                 if (x2 > w):
                     x2 = w
@@ -54,8 +54,8 @@ def crop_image(input_imgs, output_dir, size=128, overlap=0):
                 os.makedirs(result_dir, exist_ok=True)
                 output_file = os.path.join(result_dir, result_basename + '.png')
                 cv2.imwrite(output_file, crop_img)
-                x = x + size
-            y = y + size
+                x = x + size - overlap
+            y = y + size - overlap
 
 def combine_images(input_dir, output_dir, size=128):
     shutil.rmtree(output_dir)
@@ -117,7 +117,7 @@ reorganize_mitosis_images(mitosis_input_dir, mitosis_reorganized_dir)
 print("2. Crop big images into small ones")
 mitosis_files = [str(f) for f in Path(mitosis_reorganized_dir).glob('**/**/*.tif')]
 inference_input_dir = 'datasets/stage1_test'
-crop_image(mitosis_files, inference_input_dir, size=128, overlap=0)
+crop_image(mitosis_files, inference_input_dir, size=128, overlap=16)
 
 print("3. Run the inference")
 command = 'detect'
