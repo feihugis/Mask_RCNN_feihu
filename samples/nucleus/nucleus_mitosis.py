@@ -170,7 +170,7 @@ class NucleusConfig(Config):
 
 class NucleusInferenceConfig(NucleusConfig):
     # Set batch size to 1 to run one image at a time
-    GPU_COUNT = 1
+    GPU_COUNT = 2
     IMAGES_PER_GPU = 1
     # Don't resize imager for inferencing
     IMAGE_RESIZE_MODE = "pad64"
