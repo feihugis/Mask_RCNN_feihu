@@ -1,3 +1,7 @@
+# IDE
+.DS_Store
+*.iml
+
 # Data files and directories common in repo root
 datasets/
 logs/
