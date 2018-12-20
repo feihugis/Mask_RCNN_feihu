@@ -196,8 +196,17 @@ def visualize_instances(image, boxes, masks, class_ids, class_names,
     # Generate random colors
     colors = colors or random_colors(N)
     image_cv = image.astype(np.uint8).copy()
+    nucleus_centers = []
     for i in range(N):
         color = colors[i]
+
+        # Bounding box
+        if not np.any(boxes[i]):
+            # Skip this instance. Has no bbox. Likely lost in image cropping.
+            continue
+        y1, x1, y2, x2 = boxes[i]
+        nucleus_centers.append(((y1+y2)/2, (x1+x2)/2))
+
         # Mask
         mask = masks[:, :, i]
 
@@ -213,7 +222,7 @@ def visualize_instances(image, boxes, masks, class_ids, class_names,
             verts_cv = verts.reshape((-1, 1, 2)).astype(np.int)
             image_cv = cv2.polylines(image_cv, verts_cv, True, [c*255 for c in color], 1)
 
-    return image_cv
+    return image_cv, nucleus_centers
 
 def display_differences(image,
                         gt_box, gt_class_id, gt_mask,

@@ -54,6 +54,8 @@ from mrcnn import utils
 from mrcnn import model as modellib
 from mrcnn import visualize
 
+from deephistopath.detection import tuple_2_csv
+
 # Path to trained weights file
 COCO_WEIGHTS_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
 
@@ -384,24 +386,28 @@ def detect(model, dataset_dir, subset):
         r = model.detect([image], verbose=0)[0]
         # Encode image to RLE. Returns a string of multiple lines
         source_id = dataset.image_info[image_id]["id"]
-        rle = mask_to_rle(source_id, r["masks"], r["scores"])
-        submission.append(rle)
+        # rle = mask_to_rle(source_id, r["masks"], r["scores"])
+        # submission.append(rle)
         # Save image with masks
-        image_cv = visualize.visualize_instances(
+        image_cv, nucleus_centers = visualize.visualize_instances(
             image, r['rois'], r['masks'], r['class_ids'],
             dataset.class_names, r['scores'],
             show_bbox=False, show_mask=False,
             title="Predictions")
         #plt.savefig("{}/{}.png".format(submit_dir, dataset.image_info[image_id]["id"]), pad_inches=0)
-        cv2.imwrite("{}/{}.png".format(submit_dir, dataset.image_info[image_id]["id"]), image_cv)
-
+        cv2.imwrite("{}/{}.png".format(
+            submit_dir, dataset.image_info[image_id]["id"]), image_cv)
+        tuple_2_csv(nucleus_centers,
+                    "{}/{}.csv".format(
+                        submit_dir, dataset.image_info[image_id]["id"]),
+                    columns=['Y', 'X'])
 
     # Save to csv file
-    submission = "ImageId,EncodedPixels\n" + "\n".join(submission)
-    file_path = os.path.join(submit_dir, "submit.csv")
-    with open(file_path, "w") as f:
-        f.write(submission)
-    print("Saved to ", submit_dir)
+    # submission = "ImageId,EncodedPixels\n" + "\n".join(submission)
+    # file_path = os.path.join(submit_dir, "submit.csv")
+    # with open(file_path, "w") as f:
+    #     f.write(submission)
+    # print("Saved to ", submit_dir)
     return submit_dir
 
 def run(command, dataset, weights, subset, logs=DEFAULT_LOGS_DIR):
