@@ -1,5 +1,7 @@
 import cv2
+import math
 import os
+
 import numpy as np
 from pathlib import Path
 from shutil import copyfile
@@ -136,6 +138,9 @@ def add_groundtruth_mark(im_dir, ground_truth_dir, hasHeader=False, shape=Shape.
         ground_truth_file_path = os.path.join(ground_truth_dir,
                                               *im_file_basename.split("-"))
         ground_truth_file_path = "{}.csv".format(ground_truth_file_path)
+        if not os.path.exists(ground_truth_file_path):
+            print("{} doestn't exist".format(ground_truth_file_path))
+            continue
         add_ground_truth_mark_help(im_file, ground_truth_file_path,
                                    hasHeader=hasHeader, shape=shape)
 
@@ -144,6 +149,30 @@ def add_mark(img_file, csv_file, hasHeader=False, shape=Shape.CROSS,
     add_ground_truth_mark_help(img_file, csv_file, hasHeader=hasHeader,
                                shape=shape, mark_color=mark_color,
                                hasProb=hasProb)
+
+def check_nucleius_inference(inference_dir, ground_truth_dir):
+    ground_truth_csvs = [str(f) for f in Path(ground_truth_dir).glob('*/*.csv')]
+    matched_count = 0
+    total_count = 0
+    for ground_truth_csv in ground_truth_csvs:
+        ground_truth_dir, base = os.path.split(ground_truth_csv)
+        sub_dir = os.path.split(ground_truth_dir)[1]
+        inference_csv = os.path.join(inference_dir, "{}-{}".format(sub_dir, base))
+        ground_truth_locations = get_locations_from_csv(
+            ground_truth_csv, hasHeader=False, hasProb=False)
+        inference_locations = get_locations_from_csv(
+            inference_csv, hasHeader=True, hasProb=False)
+        for (x1, y1) in ground_truth_locations:
+            total_count = total_count + 1
+            for (x2, y2) in inference_locations:
+                dist = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+                if dist < 32:
+                    matched_count = matched_count + 1
+                    break
+
+    print("There are {} ground truth points, found {} of them.".format(
+        total_count, matched_count))
+
 
 print("1. Reorganize the data structure for Mask_RCNN")
 mitosis_input_dir = '../../../deep-histopath/data/mitoses/mitoses_train_image_data/'
@@ -160,20 +189,26 @@ command = 'detect'
 dataset = 'datasets/'
 weights = 'models/mask_rcnn_nucleus_0380.h5'
 subset = 'stage1_test'
-inference_result_dir = nucleus_mitosis.run(command, dataset, weights, subset)
+#inference_result_dir = nucleus_mitosis.run(command, dataset, weights, subset)
 
 print("4. Combine small inference images to big ones")
 # inference_result_dir = '../../results/nucleus/submit_20181016T152921'
 inference_combine_result = 'datasets/stage1_combine_test/'
-combine_images(inference_result_dir, inference_combine_result)
-combine_csvs(inference_result_dir, inference_combine_result, clean_output_dir=False)
+#combine_images(inference_result_dir, inference_combine_result)
+#combine_csvs(inference_result_dir, inference_combine_result, clean_output_dir=False)
 
 print("5. Add the ground truth masks")
 ground_truth_dir = '../../../deep-histopath/data/mitoses/mitoses_train_ground_truth'
-#add_groundtruth_mark(inference_combine_result, ground_truth_dir, hasHeader=False, shape=Shape.CIRCLE)
+# add_groundtruth_mark(inference_combine_result, ground_truth_dir, hasHeader=False, shape=Shape.CIRCLE)
 # add_mark('/Users/fei/Documents/Github/Mask_RCNN/samples/nucleus/datasets/stage1_combine_test/01-01.png',
 #          '/Users/fei/Documents/Github/Mask_RCNN/samples/nucleus/datasets/stage1_combine_test/01-01.csv',
 #          hasHeader=True, shape=Shape.CIRCLE, mark_color=(255,0,0,50))
+
+print("6. Check the inference result")
+inference_dir = "datasets/stage1_combine_test/"
+ground_truth_dir = "../../../deep-histopath/data/mitoses/mitoses_train_ground_truth"
+check_nucleius_inference(inference_dir, ground_truth_dir)
+
 
 def extract_patches():
     img = cv2.imread('../../../deep-histopath/data/mitoses/mitoses_train_image_data/01/01.tif')
