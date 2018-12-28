@@ -14,7 +14,7 @@ from deephistopath.evaluation import get_locations_from_csv, evaluate_global_f1
 from deephistopath.detection import tuple_2_csv, dbscan_clustering
 from samples.nucleus import nucleus_mitosis
 import tensorflow as tf
-from tensorflow.python.data.experimental.ops.matching_files import MatchingFilesDataset
+#from tensorflow.python.data.experimental.ops.matching_files import MatchingFilesDataset
 from tensorflow.python.data.ops import dataset_ops
 from train_mitoses import normalize
 from preprocess_mitoses import extract_patch
@@ -249,7 +249,8 @@ def run_inference(batch_size,
     tf.keras.backend.set_session(sess)
     # Use `MatchingFilesDataset` instead of tf.data.Dataset.list_files to
     # make sure the files are in the same sequence in each repeated operation.
-    input_file_dataset = MatchingFilesDataset(os.path.join(input_dir_path, "*.png"))
+    input_file_dataset = tf.data.Dataset.list_files(
+        os.path.join(input_dir_path, "*.png"))
     files_iterator = dataset_ops.make_one_shot_iterator(input_file_dataset.batch(512))
     input_files = np.empty([0], dtype=np.str)
     while True:
@@ -262,7 +263,7 @@ def run_inference(batch_size,
             break
     input_files = input_files.reshape((-1, 1))
 
-    #dataset = MatchingFilesDataset(os.path.join(dir_path, "*.png"))
+    input_file_dataset = tf.data.Dataset.from_tensor_slices(input_files)
     img_dataset = input_file_dataset.map(lambda file: get_image_tf(file),
                                          num_parallel_calls=1)
     img_dataset = img_dataset\
