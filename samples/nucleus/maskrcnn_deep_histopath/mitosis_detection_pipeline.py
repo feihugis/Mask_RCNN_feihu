@@ -1,21 +1,27 @@
 import cv2
 import math
 import os
+import sys
+import shutil
+import logging
 
 import numpy as np
 from pathlib import Path
 from shutil import copyfile
 from deephistopath.evaluation import add_ground_truth_mark_help
 from deephistopath.visualization import Shape
-from deephistopath.evaluation import get_locations_from_csv
-from deephistopath.detection import tuple_2_csv
-from  samples.nucleus import nucleus_mitosis
-import sys
-import shutil
+from deephistopath.evaluation import get_locations_from_csv, evaluate_global_f1
+from deephistopath.detection import tuple_2_csv, dbscan_clustering
+from samples.nucleus import nucleus_mitosis
+import tensorflow as tf
+from tensorflow.python.data.experimental.ops.matching_files import MatchingFilesDataset
+from tensorflow.python.data.ops import dataset_ops
+from train_mitoses import normalize
 from preprocess_mitoses import extract_patch
 from preprocess_mitoses import gen_patches
 from preprocess_mitoses import save_patch
 from eval_mitoses import evaluate
+
 
 # Root directory of the project
 ROOT_DIR = os.path.abspath("../../")
@@ -150,6 +156,10 @@ def add_mark(img_file, csv_file, hasHeader=False, shape=Shape.CROSS,
                                shape=shape, mark_color=mark_color,
                                hasProb=hasProb)
 
+def is_inside(x1, y1, x2, y2, radius):
+    dist = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+    return dist <= radius
+
 def check_nucleius_inference(inference_dir, ground_truth_dir):
     ground_truth_csvs = [str(f) for f in Path(ground_truth_dir).glob('*/*.csv')]
     matched_count = 0
@@ -165,14 +175,154 @@ def check_nucleius_inference(inference_dir, ground_truth_dir):
         for (x1, y1) in ground_truth_locations:
             total_count = total_count + 1
             for (x2, y2) in inference_locations:
-                dist = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-                if dist < 32:
+                if (is_inside(x2, y2, x1, y1, 32)):
                     matched_count = matched_count + 1
                     break
-
     print("There are {} ground truth points, found {} of them.".format(
         total_count, matched_count))
 
+
+def extract_patches(img_dir, location_csv_dir, output_patch_basedir):
+    location_csv_files = [str(f) for f in Path(location_csv_dir).glob('*.csv')]
+    if len(location_csv_files) == 0:
+        raise ValueError(
+            "Please check the input dir for the location csv files.")
+
+    for location_csv_file in location_csv_files:
+        print("Processing {} ......".format(location_csv_file))
+        points = get_locations_from_csv(location_csv_file, hasHeader=True,
+                                        hasProb=False)
+        # Get the image file name.
+        subfolder = os.path.basename(location_csv_file) \
+            .replace('-', '/') \
+            .replace('.csv', '')
+        img_file = os.path.join(img_dir, "{}.tif".format(subfolder))
+        print("Processing {} ......".format(img_file))
+        img = cv2.imread(img_file)
+        img = np.asarray(img)[:, :, ::-1]
+
+        output_patch_dir = os.path.join(output_patch_basedir, subfolder)
+        if not os.path.exists(output_patch_dir):
+            os.makedirs(output_patch_dir, exist_ok=True)
+
+        for (row, col) in points:
+            patch = extract_patch(img, row, col, 64)
+            save_patch(patch, path=output_patch_dir, lab=0, case=0, region=0,
+                row=row, col=col, rotation=0, row_shift=0, col_shift=0,
+                suffix=0, ext="png")
+
+def get_image_tf(filename):
+  """Get image from filename.
+
+  Args:
+    filename: String filename of an image.
+
+  Returns:
+    TensorFlow tensor containing the decoded and resized image with
+    type float32 and values in [0, 1).
+  """
+  image_string = tf.read_file(filename)
+  # shape (h,w,c), uint8 in [0, 255]:
+  image = tf.image.decode_png(image_string, channels=3)
+  image = tf.image.convert_image_dtype(image, dtype=tf.float32)
+  return image
+
+def get_location_from_file_name(filename):
+    basename = os.path.basename(str(filename))
+    filename_comps = basename.split('_')
+    row = int(filename_comps[3])
+    col = int(filename_comps[4])
+    return row, col
+
+def run_inference(batch_size,
+                  input_dir_path,
+                  output_dir_path,
+                  model_file,
+                  num_parallel_calls=1,
+                  prob_thres=0.5,
+                  eps=64, min_samples=1,
+                  isWeightedAvg=False):
+    # create session
+    config = tf.ConfigProto(
+        allow_soft_placement=True)  # , log_device_placement=True)
+    sess = tf.Session(config=config)
+    tf.keras.backend.set_session(sess)
+    # Use `MatchingFilesDataset` instead of tf.data.Dataset.list_files to
+    # make sure the files are in the same sequence in each repeated operation.
+    input_file_dataset = MatchingFilesDataset(os.path.join(input_dir_path, "*.png"))
+    files_iterator = dataset_ops.make_one_shot_iterator(input_file_dataset.batch(512))
+    input_files = np.empty([0], dtype=np.str)
+    while True:
+        try:
+            next_batch = sess.run(files_iterator.get_next())
+            input_files = np.concatenate((input_files, next_batch))
+        except tf.errors.OutOfRangeError:
+            print("The size of input patches under {} is {}".format(
+                input_dir_path, input_files.size))
+            break
+    input_files = input_files.reshape((-1, 1))
+
+    #dataset = MatchingFilesDataset(os.path.join(dir_path, "*.png"))
+    img_dataset = input_file_dataset.map(lambda file: get_image_tf(file),
+                                         num_parallel_calls=1)
+    img_dataset = img_dataset\
+        .map(lambda img: normalize(img, "resnet_custom"))\
+        .batch(batch_size=batch_size)
+    # prefetch
+    #dataset = dataset.prefetch(buffer_size=12)
+    img_iterator = dataset_ops.make_one_shot_iterator(img_dataset)
+
+    # load the model and add the sigmoid layer
+    base_model = tf.keras.models.load_model(model_file, compile=False)
+
+    # specify the name of the added activation layer to avoid the name
+    # conflict in ResNet
+    probs = tf.keras.layers.Activation('sigmoid', name="sigmoid")(
+        base_model.output)
+    model = tf.keras.models.Model(inputs=base_model.input, outputs=probs)
+
+    steps = int(input_files.size / batch_size) + 1
+    # Do not set the batch size here if the data is in Dataset format
+    prob_result = model.predict(img_dataset, steps=steps)
+
+    mitosis_probs = prob_result[prob_result > prob_thres]
+    mitosis_patch_files = input_files[prob_result > prob_thres]
+    inference_result = []
+    for i in range(mitosis_patch_files.size):
+        row, col = get_location_from_file_name(mitosis_patch_files[i])
+        prob = mitosis_probs[i]
+        inference_result.append((row, col, prob))
+
+    clustered_pred_locations = dbscan_clustering(
+        inference_result, eps=eps, min_samples=min_samples,
+        isWeightedAvg=isWeightedAvg)
+
+    tuple_2_csv(inference_result,
+                os.path.join(output_dir_path, 'mitosis_locations.csv'))
+    tuple_2_csv(clustered_pred_locations,
+                os.path.join(output_dir_path, 'clustered_mitosis_locations.csv'))
+
+    logging.debug(mitosis_probs)
+    logging.debug(mitosis_patch_files)
+
+def run_reference_in_batch(batch_size,
+                           input_dir_basepath ='datasets/sample_patches/',
+                           output_dir_basepath ='datasets/inference_results/',
+                           model_file='../../../deep-histopath/experiments/models/deep_histopath_model.hdf5',
+                           num_parallel_calls=1,
+                           prob_thres=0.5,
+                           eps=64, min_samples=1,
+                           isWeightedAvg=False):
+    input_patch_dirs = [str(f) for f in Path(input_dir_basepath).glob('*/*')]
+    for input_patch_dir in input_patch_dirs:
+        print("Run the inference on {} ......".format(input_patch_dir))
+        input_patch_path = Path(input_patch_dir)
+        subfolder = os.path.join(input_patch_path.parent.name,
+                                 input_patch_path.name)
+        reference_output_path = os.path.join(output_dir_basepath, subfolder)
+        run_inference(batch_size, input_patch_path, reference_output_path,
+                      model_file, num_parallel_calls, prob_thres, eps,
+                      min_samples, isWeightedAvg)
 
 print("1. Reorganize the data structure for Mask_RCNN")
 mitosis_input_dir = '../../../deep-histopath/data/mitoses/mitoses_train_image_data/'
@@ -207,40 +357,50 @@ ground_truth_dir = '../../../deep-histopath/data/mitoses/mitoses_train_ground_tr
 print("6. Check the inference result")
 inference_dir = "datasets/stage1_combine_test/"
 ground_truth_dir = "../../../deep-histopath/data/mitoses/mitoses_train_ground_truth"
-check_nucleius_inference(inference_dir, ground_truth_dir)
+#check_nucleius_inference(inference_dir, ground_truth_dir)
 
+print("7. Extract patches according to the inference result")
+img_dir = '../../../deep-histopath/data/mitoses/mitoses_train_image_data/'
+location_csv_dir = 'datasets/stage1_combine_test/'
+output_patch_basedir = 'datasets/sample_patches'
+extract_patches(img_dir, location_csv_dir, output_patch_basedir)
 
-def extract_patches():
-    img = cv2.imread('../../../deep-histopath/data/mitoses/mitoses_train_image_data/01/01.tif')
-    img = np.asarray(img)
-    points = get_locations_from_csv('/Users/fei/Documents/Github/Mask_RCNN/samples/nucleus/datasets/stage1_combine_test/01-01.csv',
-                                    hasHeader=True, hasProb=False)
-    patches = gen_patches(img, points, size=64, rotations=0, translations=0,
-                              max_shift=3, p=1)
-    for i, (patch, row, col, rot, row_shift, col_shift) in enumerate(patches):
-        save_patch(patch, path='datasets/sample_patches', lab=-1, case=-1,
-                   region=-1, row=row, col=col, rotation=rot, row_shift=row_shift,
-                   col_shift=col_shift, suffix=i, ext="png")
-    # for (row, col) in points:
-    #     patch = extract_patch(img, row, col, 64)
-    #     patches.append(patch)
-    #print(len(patches), patches[0].shape)
+print("8. Run inference")
+batch_size = 128
+input_dir_basepath = 'datasets/sample_patches/'
+output_dir_basepath = 'datasets/inference_results/'
+model_file = '../../../deep-histopath/experiments/models/deep_histopath_model.hdf5'
+num_parallel_calls = 1
+prob_thres = 0.5,
+eps = 64
+min_samples = 1
+isWeightedAvg = False
+"""
+run_reference_in_batch(
+    128,
+    input_dir_basepath=input_dir_basepath,
+    output_dir_basepath=output_dir_basepath,
+    model_file=model_file,
+    num_parallel_calls=num_parallel_calls,
+    prob_thres=prob_thres,
+    eps=eps,
+    min_samples=min_samples,
+    isWeightedAvg=isWeightedAvg)
+"""
 
-#extract_patches()
+print("9. Compute F1 score")
+"""
+f1, precision, recall, over_detected, non_detected, FP, TP, FN = \
+    evaluate_global_f1(output_dir_basepath, ground_truth_dir, threshold=30,
+                       prob_threshold=None)
+print("F1: {} \n"
+      "Precision: {} \n"
+      "Recall: {} \n"
+      "Over_detected: {} \n"
+      "Non_detected: {} \n"
+      "FP: {} \n"
+      "TP: {} \n"
+      "FN: {} \n".format(f1, precision, recall, over_detected, non_detected,
+                         FP, TP, FN))
+"""
 
-def run_inference():
-    dir_path = 'datasets/sample_patches'
-    # evaluate(dir_path, patch_size=64, batch_size=32, model_path='../../../deep-histopath/experiments/models/deep_histopath_model.hdf5',
-    #          model_name='resnet', prob_threshold=0.8, marginalization=False,
-    #          threads=3, prefetch_batches=32, log_interval=32)
-    images = [str(f) for f in Path(dir_path).glob('*.png')]
-    import requests
-    url = 'http://localhost:5000/model/predict'
-    for img in images:
-        files = {'image': ('image.jpg', open(img, 'rb'), 'images/jpeg')}
-        r = requests.post(url, files=files).json()
-        prob = r['predictions'][0]['probability']
-        if prob > 0.1:
-            print("{}:{}".format(img, prob))
-
-#run_inference()
