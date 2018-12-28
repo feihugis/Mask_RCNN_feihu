@@ -288,9 +288,12 @@ def run_inference(batch_size,
         prob = mitosis_probs[i]
         inference_result.append((row, col, prob))
 
-    clustered_pred_locations = dbscan_clustering(
-        inference_result, eps=eps, min_samples=min_samples,
-        isWeightedAvg=isWeightedAvg)
+    if len(inference_result) > 0:
+        clustered_pred_locations = dbscan_clustering(
+            inference_result, eps=eps, min_samples=min_samples,
+            isWeightedAvg=isWeightedAvg)
+    else:
+        print("Do not have mitosis in {}".format(input_dir_path))
 
     tuple_2_csv(inference_result,
                 os.path.join(output_dir_path, 'mitosis_locations.csv'))
