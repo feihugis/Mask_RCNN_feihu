@@ -292,13 +292,16 @@ def run_inference(batch_size,
         clustered_pred_locations = dbscan_clustering(
             inference_result, eps=eps, min_samples=min_samples,
             isWeightedAvg=isWeightedAvg)
+        tuple_2_csv(
+            inference_result,
+            os.path.join(output_dir_path, 'mitosis_locations.csv'))
+        tuple_2_csv(
+            clustered_pred_locations,
+            os.path.join(output_dir_path, 'clustered_mitosis_locations.csv'))
     else:
         print("Do not have mitosis in {}".format(input_dir_path))
 
-    tuple_2_csv(inference_result,
-                os.path.join(output_dir_path, 'mitosis_locations.csv'))
-    tuple_2_csv(clustered_pred_locations,
-                os.path.join(output_dir_path, 'clustered_mitosis_locations.csv'))
+
 
 def run_reference_in_batch(batch_size,
                            input_dir_basepath ='datasets/sample_patches/',
