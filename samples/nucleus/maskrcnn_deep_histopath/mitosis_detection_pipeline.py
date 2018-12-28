@@ -362,7 +362,7 @@ output_patch_basedir = 'datasets/sample_patches'
 #extract_patches(img_dir, location_csv_dir, output_patch_basedir)
 
 print("8. Run inference")
-batch_size = 128
+batch_size = 128 * 10
 input_dir_basepath = 'datasets/sample_patches/'
 output_dir_basepath = 'datasets/inference_results/'
 model_file = '../../../deep-histopath/experiments/models/deep_histopath_model.hdf5'
