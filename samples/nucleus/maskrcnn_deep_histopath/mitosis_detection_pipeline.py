@@ -247,21 +247,8 @@ def run_inference(batch_size,
         allow_soft_placement=True)  # , log_device_placement=True)
     sess = tf.Session(config=config)
     tf.keras.backend.set_session(sess)
-    # Use `MatchingFilesDataset` instead of tf.data.Dataset.list_files to
-    # make sure the files are in the same sequence in each repeated operation.
-    input_file_dataset = tf.data.Dataset.list_files(
-        os.path.join(input_dir_path, "*.png"))
-    files_iterator = dataset_ops.make_one_shot_iterator(input_file_dataset.batch(512))
-    input_files = np.empty([0], dtype=np.str)
-    while True:
-        try:
-            next_batch = sess.run(files_iterator.get_next())
-            input_files = np.concatenate((input_files, next_batch))
-        except tf.errors.OutOfRangeError:
-            print("The size of input patches under {} is {}".format(
-                input_dir_path, input_files.size))
-            break
-    input_files = input_files.reshape((-1, 1))
+    input_file_paths = [str(f) for f in Path(input_dir_path).glob('*.png')]
+    input_files = np.asarray(input_file_paths, dtype=np.str)
 
     input_file_dataset = tf.data.Dataset.from_tensor_slices(input_files)
     img_dataset = input_file_dataset.map(lambda file: get_image_tf(file),
@@ -269,9 +256,8 @@ def run_inference(batch_size,
     img_dataset = img_dataset\
         .map(lambda img: normalize(img, "resnet_custom"))\
         .batch(batch_size=batch_size)
-    # prefetch
-    #dataset = dataset.prefetch(buffer_size=12)
-    img_iterator = dataset_ops.make_one_shot_iterator(img_dataset)
+    img_iterator = img_dataset.make_one_shot_iterator()
+    next_batch = img_iterator.get_next()
 
     # load the model and add the sigmoid layer
     base_model = tf.keras.models.load_model(model_file, compile=False)
@@ -282,11 +268,19 @@ def run_inference(batch_size,
         base_model.output)
     model = tf.keras.models.Model(inputs=base_model.input, outputs=probs)
 
-    steps = int(input_files.size / batch_size) + 1
-    # Do not set the batch size here if the data is in Dataset format
-    prob_result = model.predict(img_dataset, steps=steps)
+    prob_result = np.empty((0, 1))
+    while True:
+        try:
+            img_batch = sess.run(next_batch)
+            pred_np = model.predict(img_batch, batch_size)
+            prob_result = np.concatenate((prob_result, pred_np), axis=0)
+        except tf.errors.OutOfRangeError:
+            print("prediction result size: {}".format(prob_result.shape))
+            break
 
+    assert prob_result.shape[0] == input_files.shape[0]
     mitosis_probs = prob_result[prob_result > prob_thres]
+    input_files = input_files.reshape(-1, 1)
     mitosis_patch_files = input_files[prob_result > prob_thres]
     inference_result = []
     for i in range(mitosis_patch_files.size):
@@ -303,9 +297,6 @@ def run_inference(batch_size,
     tuple_2_csv(clustered_pred_locations,
                 os.path.join(output_dir_path, 'clustered_mitosis_locations.csv'))
 
-    logging.debug(mitosis_probs)
-    logging.debug(mitosis_patch_files)
-
 def run_reference_in_batch(batch_size,
                            input_dir_basepath ='datasets/sample_patches/',
                            output_dir_basepath ='datasets/inference_results/',
@@ -314,7 +305,8 @@ def run_reference_in_batch(batch_size,
                            prob_thres=0.5,
                            eps=64, min_samples=1,
                            isWeightedAvg=False):
-    input_patch_dirs = [str(f) for f in Path(input_dir_basepath).glob('*/*')]
+    re = '[0-9]'*2 + '/' + '[0-9]'*2
+    input_patch_dirs = [str(f) for f in Path(input_dir_basepath).glob(re)]
     for input_patch_dir in input_patch_dirs:
         print("Run the inference on {} ......".format(input_patch_dir))
         input_patch_path = Path(input_patch_dir)
@@ -364,7 +356,7 @@ print("7. Extract patches according to the inference result")
 img_dir = '../../../deep-histopath/data/mitoses/mitoses_train_image_data/'
 location_csv_dir = 'datasets/stage1_combine_test/'
 output_patch_basedir = 'datasets/sample_patches'
-extract_patches(img_dir, location_csv_dir, output_patch_basedir)
+#extract_patches(img_dir, location_csv_dir, output_patch_basedir)
 
 print("8. Run inference")
 batch_size = 128
@@ -376,7 +368,6 @@ prob_thres = 0.5,
 eps = 64
 min_samples = 1
 isWeightedAvg = False
-"""
 run_reference_in_batch(
     128,
     input_dir_basepath=input_dir_basepath,
@@ -387,7 +378,6 @@ run_reference_in_batch(
     eps=eps,
     min_samples=min_samples,
     isWeightedAvg=isWeightedAvg)
-"""
 
 print("9. Compute F1 score")
 """
