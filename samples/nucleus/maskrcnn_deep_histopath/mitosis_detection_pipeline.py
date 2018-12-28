@@ -234,19 +234,16 @@ def get_location_from_file_name(filename):
     col = int(filename_comps[4])
     return row, col
 
-def run_inference(batch_size,
+def run_inference(model,
+                  sess,
+                  batch_size,
                   input_dir_path,
                   output_dir_path,
-                  model_file,
                   num_parallel_calls=1,
                   prob_thres=0.5,
                   eps=64, min_samples=1,
                   isWeightedAvg=False):
-    # create session
-    config = tf.ConfigProto(
-        allow_soft_placement=True)  # , log_device_placement=True)
-    sess = tf.Session(config=config)
-    tf.keras.backend.set_session(sess)
+
     input_file_paths = [str(f) for f in Path(input_dir_path).glob('*.png')]
     input_files = np.asarray(input_file_paths, dtype=np.str)
 
@@ -259,16 +256,8 @@ def run_inference(batch_size,
     img_iterator = img_dataset.make_one_shot_iterator()
     next_batch = img_iterator.get_next()
 
-    # load the model and add the sigmoid layer
-    base_model = tf.keras.models.load_model(model_file, compile=False)
-
-    # specify the name of the added activation layer to avoid the name
-    # conflict in ResNet
-    probs = tf.keras.layers.Activation('sigmoid', name="sigmoid")(
-        base_model.output)
-    model = tf.keras.models.Model(inputs=base_model.input, outputs=probs)
-
     prob_result = np.empty((0, 1))
+
     while True:
         try:
             img_batch = sess.run(next_batch)
@@ -302,6 +291,24 @@ def run_inference(batch_size,
         print("Do not have mitosis in {}".format(input_dir_path))
 
 
+def load_model(model_file):
+    # create session
+    config = tf.ConfigProto(
+        allow_soft_placement=True)  # , log_device_placement=True)
+    sess = tf.Session(config=config)
+    tf.keras.backend.set_session(sess)
+
+    # load the model and add the sigmoid layer
+    base_model = tf.keras.models.load_model(model_file, compile=False)
+
+    # specify the name of the added activation layer to avoid the name
+    # conflict in ResNet
+    probs = tf.keras.layers.Activation('sigmoid', name="sigmoid")(
+        base_model.output)
+    model = tf.keras.models.Model(inputs=base_model.input, outputs=probs)
+
+    return model, sess
+
 
 def run_reference_in_batch(batch_size,
                            input_dir_basepath ='datasets/sample_patches/',
@@ -313,15 +320,17 @@ def run_reference_in_batch(batch_size,
                            isWeightedAvg=False):
     re = '[0-9]'*2 + '/' + '[0-9]'*2
     input_patch_dirs = [str(f) for f in Path(input_dir_basepath).glob(re)]
+
+    model, sess = load_model(model_file)
     for input_patch_dir in input_patch_dirs:
         print("Run the inference on {} ......".format(input_patch_dir))
         input_patch_path = Path(input_patch_dir)
         subfolder = os.path.join(input_patch_path.parent.name,
                                  input_patch_path.name)
         reference_output_path = os.path.join(output_dir_basepath, subfolder)
-        run_inference(batch_size, input_patch_path, reference_output_path,
-                      model_file, num_parallel_calls, prob_thres, eps,
-                      min_samples, isWeightedAvg)
+        run_inference(model, sess, batch_size, input_patch_path,
+                      reference_output_path, num_parallel_calls, prob_thres,
+                      eps, min_samples, isWeightedAvg)
 
 print("1. Reorganize the data structure for Mask_RCNN")
 mitosis_input_dir = '../../../deep-histopath/data/mitoses/mitoses_train_image_data/'
@@ -365,7 +374,7 @@ output_patch_basedir = 'datasets/sample_patches'
 #extract_patches(img_dir, location_csv_dir, output_patch_basedir)
 
 print("8. Run inference")
-batch_size = 128 * 10
+batch_size = 128*10
 input_dir_basepath = 'datasets/sample_patches/'
 output_dir_basepath = 'datasets/inference_results/'
 model_file = '../../../deep-histopath/experiments/models/deep_histopath_model.hdf5'
@@ -375,7 +384,7 @@ eps = 64
 min_samples = 1
 isWeightedAvg = False
 run_reference_in_batch(
-    128,
+    batch_size=batch_size,
     input_dir_basepath=input_dir_basepath,
     output_dir_basepath=output_dir_basepath,
     model_file=model_file,
