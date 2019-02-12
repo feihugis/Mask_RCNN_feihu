@@ -170,7 +170,7 @@ def display_instances(image, boxes, masks, class_ids, class_names,
         plt.show()
 
 def visualize_instances(image, boxes, masks, class_ids, class_names,
-                        scores=None, title="",
+                        scores, title="",
                         figsize=(16, 16), ax=None,
                         show_mask=True, show_bbox=True,
                         colors=None, captions=None):
@@ -205,7 +205,7 @@ def visualize_instances(image, boxes, masks, class_ids, class_names,
             # Skip this instance. Has no bbox. Likely lost in image cropping.
             continue
         y1, x1, y2, x2 = boxes[i]
-        nucleus_centers.append(((y1+y2)/2, (x1+x2)/2))
+        nucleus_centers.append(((y1+y2)/2, (x1+x2)/2, scores[i]))
 
         # Mask
         mask = masks[:, :, i]
