@@ -220,6 +220,29 @@ class NucleusDataset(utils.Dataset):
                 image_id=image_id,
                 path=os.path.join(dataset_dir, image_id, "images/{}.png".format(image_id)))
 
+    def list_images(self, dataset_dir):
+        """Load a subset of the nuclei dataset.
+
+        dataset_dir: Root directory of the dataset
+        subset: Subset to load. Either the name of the sub-directory,
+                such as stage1_train, stage1_test, ...etc. or, one of:
+                * train: stage1_train excluding validation images
+                * val: validation images from VAL_IMAGE_IDS
+        """
+        # Add classes. We have one class.
+        # Naming the dataset nucleus, and the class nucleus
+        self.add_class("nucleus", 1, "nucleus")
+
+        # Get image ids from directory names
+        image_ids = next(os.walk(dataset_dir))[1]
+
+        # Add images
+        for image_id in image_ids:
+            self.add_image(
+                "nucleus",
+                image_id=image_id,
+                path=os.path.join(dataset_dir, image_id, "images/{}.png".format(image_id)))
+
     def load_mask(self, image_id):
         """Generate instance masks for an image.
        Returns:
@@ -362,15 +385,16 @@ def mask_to_rle(image_id, mask, scores):
 #  Detection
 ############################################################
 
-def detect(model, dataset_dir, subset):
+def detect(model, dataset_dir, subset, submit_dir):
     """Run detection on images in the given directory."""
     print("Running on {}".format(dataset_dir))
 
     # Create directory
     if not os.path.exists(RESULTS_DIR):
         os.makedirs(RESULTS_DIR)
-    submit_dir = "submit_{:%Y%m%dT%H%M%S}".format(datetime.datetime.now())
+    #submit_dir = "submit_{:%Y%m%dT%H%M%S}".format(datetime.datetime.now())
     submit_dir = os.path.join(RESULTS_DIR, submit_dir)
+    print("Inference results are saved to ", submit_dir)
     os.makedirs(submit_dir)
 
     # Read dataset
@@ -409,6 +433,49 @@ def detect(model, dataset_dir, subset):
     #     f.write(submission)
     # print("Saved to ", submit_dir)
     return submit_dir
+
+
+def detect_v2(model, dataset_dir, submit_dir, visualize_inference_results=True):
+  """Run detection on images in the given directory."""
+  print("Running on {}".format(dataset_dir))
+
+  # Create directory
+  if not os.path.exists(RESULTS_DIR):
+    os.makedirs(RESULTS_DIR)
+  # submit_dir = "submit_{:%Y%m%dT%H%M%S}".format(datetime.datetime.now())
+  # submit_dir = os.path.join(RESULTS_DIR, submit_dir)
+  print("Inference results are saved to ", submit_dir)
+  os.makedirs(submit_dir, exist_ok=True)
+
+  # Read dataset
+  dataset = NucleusDataset()
+  dataset.list_images(dataset_dir)
+  dataset.prepare()
+  # Load over images
+  submission = []
+  for image_id in dataset.image_ids:
+    # Load image and run detection
+    image = dataset.load_image(image_id)
+    # Detect objects
+    r = model.detect([image], verbose=0)[0]
+    # Encode image to RLE. Returns a string of multiple lines
+    source_id = dataset.image_info[image_id]["id"]
+    # rle = mask_to_rle(source_id, r["masks"], r["scores"])
+    # submission.append(rle)
+    # Save image with masks
+    image_cv, nucleus_centers = visualize.visualize_instances(
+      image, r['rois'], r['masks'], r['class_ids'],
+      dataset.class_names, r['scores'],
+      show_bbox=False, show_mask=False,
+      title="Predictions")
+    if visualize_inference_results:
+        cv2.imwrite("{}/{}.png".format(
+          submit_dir, dataset.image_info[image_id]["id"]), image_cv)
+    tuple_2_csv(nucleus_centers,
+      "{}/{}.csv".format(
+        submit_dir, dataset.image_info[image_id]["id"]),
+      columns=['Y', 'X', 'prob'])
+  return submit_dir
 
 def run(command, dataset, weights, subset, logs=DEFAULT_LOGS_DIR):
     # Configurations
@@ -461,6 +528,25 @@ def run(command, dataset, weights, subset, logs=DEFAULT_LOGS_DIR):
     else:
         print("'{}' is not recognized. "
               "Use 'train' or 'detect'".format(command))
+
+
+def inference(dataset_dir, weights, inference_result_dir, logs=DEFAULT_LOGS_DIR):
+  # Configurations
+  config = NucleusInferenceConfig()
+  config.display()
+
+  # Create model
+  model = modellib.MaskRCNN(mode="inference", config=config, model_dir=logs)
+
+  # Select weights file to load
+  weights_path = weights
+
+  # Load weights
+  print("Loading weights ", weights_path)
+  model.load_weights(weights_path, by_name=True)
+
+  inference_result = detect_v2(model, dataset_dir, inference_result_dir)
+  return inference_result
 
 def main(args):
     # Configurations

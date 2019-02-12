@@ -29,18 +29,17 @@ class ValConfig(object):
 
     # step_2: Crop big images into small ones.
     # TODO: Currently this value needs to be hard-coded.
-    inference_input_dir = 'datasets/stage1_test'
+    inference_input_dir = 'datasets/val_crop_images'
+    crop_image_size = 512
+    crop_image_overlap = 16
 
     # step_3: Run the nucleus segmentation inference
-    command = 'detect'
-    dataset = 'datasets/'
     weights = 'models/mask_rcnn_nucleus_0380.h5'
-    subset = 'stage1_test'
-    inference_result_dir = '' # returned by the inference function
+    maskrcnn_inference_result_dir = 'datasets/val_maskrcnn_inference_result'
 
     # step_4
-    inference_result_dir = '../../results/nucleus/submit_20181016T152921'
-    inference_combine_result = 'datasets/stage1_combine_test_val/'
+    maskrcnn_inference_combined_result = \
+        'datasets/val_maskrcnn_combined_inference_result/'
 
     # step_5
     ground_truth_dir = '../../../deep-histopath/data/mitoses/val_ground_truth'
@@ -49,17 +48,21 @@ class ValConfig(object):
     inference_dir = "datasets/stage1_combine_test_val/"
 
     # step_7
-    img_dir = '../../../deep-histopath/data/mitoses/mitoses_train_image_data/'
-    location_csv_dir = 'datasets/stage1_combine_test_val/'
-    output_patch_basedir = 'datasets/sample_patches'
+    extracted_nucleus_dir = 'datasets/val_extracted_nucleus_patches'
+    # the mitosis patch should be bigger than mitosis tile as the patch will be
+    # augmented (e.g. rotation) and crop into the mitosis tile.
+    mitosis_patch_size = 72
+    augmentation_number = 8
+    mitosis_tile_size = 64
+    mitosis_classification_prefetch = 32  # parameter for tf.dataset.prefetch
+    mitosis_classification_num_parallel_calls = 8  # parameter for tf.dataset.map
 
     # step_8
     input_dir_basepath = 'datasets/sample_patches/'
-    output_dir_basepath = 'datasets/inference_results/'
-    model_file = '../../../deep-histopath/experiments/models/deep_histopath_model.hdf5'
+    mitosis_classification_result_dir = 'datasets/val_mitosis_classification_result/'
+    mitosis_classification_model_file = '../../../deep-histopath/experiments/models/deep_histopath_model.hdf5'
 
     # step_9
-    output_dir_basepath = 'datasets/val_results/'
     ground_truth_dir = "../../../deep-histopath/data/mitoses/val_ground_truth"
 
 
@@ -118,7 +121,7 @@ def crop_image(input_imgs, output_dir, size=128, overlap=0):
                 x = x + size - overlap
             y = y + size - overlap
 
-def combine_images(input_dir, output_dir, size=128, clean_output_dir=False):
+def combine_images(input_dir, output_dir, size, clean_output_dir=False):
     if clean_output_dir:
         shutil.rmtree(output_dir)
     input_files = [str(f) for f in Path(input_dir).glob('**/**/*.png')]
@@ -229,7 +232,8 @@ def check_nucleius_inference(inference_dir, ground_truth_dir):
         total_count, matched_count))
 
 
-def extract_patches(img_dir, location_csv_dir, output_patch_basedir):
+def extract_patches(img_dir, location_csv_dir, output_patch_basedir,
+                    patch_size=64):
     location_csv_files = [str(f) for f in Path(location_csv_dir).glob('*.csv')]
     if len(location_csv_files) == 0:
         raise ValueError(
@@ -253,7 +257,7 @@ def extract_patches(img_dir, location_csv_dir, output_patch_basedir):
             os.makedirs(output_patch_dir, exist_ok=True)
 
         for (row, col) in points:
-            patch = extract_patch(img, row, col, 64)
+            patch = extract_patch(img, row, col, patch_size)
             save_patch(patch, path=output_patch_dir, lab=0, case=0, region=0,
                 row=row, col=col, rotation=0, row_shift=0, col_shift=0,
                 suffix=0, ext="png")
@@ -281,28 +285,32 @@ def get_location_from_file_name(filename):
     col = int(filename_comps[4])
     return row, col
 
-def run_inference(model,
-                  sess,
-                  batch_size,
-                  input_dir_path,
-                  output_dir_path,
-                  num_parallel_calls=1,
-                  prob_thres=0.5,
-                  eps=64, min_samples=1,
-                  isWeightedAvg=False):
+def run_mitosis_classification(model,
+                               sess,
+                               batch_size,
+                               input_dir_path,
+                               output_dir_path,
+                               augmentation_number,
+                               mitosis_tile_size=64,
+                               num_parallel_calls=1,
+                               prefetch=32,
+                               prob_thres=0.5,
+                               eps=64, min_samples=1,
+                               isWeightedAvg=False):
 
     input_file_paths = [str(f) for f in Path(input_dir_path).glob('*.png')]
     input_files = np.asarray(input_file_paths, dtype=np.str)
     steps = len(input_file_paths)
-    augmentation_size = 128
-    patch_size = 64
 
     input_file_dataset = tf.data.Dataset.from_tensor_slices(input_files)
     img_dataset = input_file_dataset.map(lambda file: get_image_tf(file),
                                          num_parallel_calls=1)
     img_dataset = img_dataset\
-        .map(lambda img: create_augmented_batch(img, augmentation_size, patch_size))\
-        .map(lambda img: normalize(img, "resnet_custom"))\
+        .map(lambda img: create_augmented_batch(img, augmentation_number, mitosis_tile_size),
+             num_parallel_calls=num_parallel_calls)\
+        .map(lambda img: normalize(img, "resnet_custom"),
+             num_parallel_calls=num_parallel_calls)\
+        .prefetch(prefetch)
         #.batch(batch_size=batch_size)
     img_iterator = img_dataset.make_one_shot_iterator()
     next_batch = img_iterator.get_next()
@@ -314,7 +322,8 @@ def run_inference(model,
             pred_np = model.predict(next_batch, steps=steps)
             print("Shape: ", pred_np.shape)
             #pred_np = tf.reduce_mean(pred_np, axis=0, keepdims=True, name="avg_x")
-            prob_result = np.average(pred_np.reshape(-1, augmentation_size), axis=1)
+            prob_result = \
+                np.average(pred_np.reshape(-1, augmentation_number), axis=1)
             #prob_result = np.concatenate((prob_result, pred_np), axis=0)
         except tf.errors.OutOfRangeError:
             print("prediction result size: {}".format(prob_result.shape))
@@ -363,14 +372,17 @@ def load_model(model_file):
     return model, sess
 
 
-def run_reference_in_batch(batch_size,
-                           input_dir_basepath ='datasets/sample_patches/',
-                           output_dir_basepath ='datasets/inference_results/',
-                           model_file='../../../deep-histopath/experiments/models/deep_histopath_model.hdf5',
-                           num_parallel_calls=1,
-                           prob_thres=0.5,
-                           eps=64, min_samples=1,
-                           isWeightedAvg=False):
+def run_mitosis_classification_in_batch(batch_size,
+                                        input_dir_basepath,
+                                        output_dir_basepath,
+                                        model_file,
+                                        augmentation_number,
+                                        mitosis_tile_size=64,
+                                        num_parallel_calls=1,
+                                        prefectch= 32,
+                                        prob_thres=0.5,
+                                        eps=64, min_samples=1,
+                                        isWeightedAvg=True):
     re = '[0-9]'*2 + '/' + '[0-9]'*2
     input_patch_dirs = [str(f) for f in Path(input_dir_basepath).glob(re)]
 
@@ -381,94 +393,91 @@ def run_reference_in_batch(batch_size,
         subfolder = os.path.join(input_patch_path.parent.name,
                                  input_patch_path.name)
         reference_output_path = os.path.join(output_dir_basepath, subfolder)
-        run_inference(model, sess, batch_size, input_patch_path,
-                      reference_output_path, num_parallel_calls, prob_thres,
-                      eps, min_samples, isWeightedAvg)
+        run_mitosis_classification(
+            model, sess, batch_size, input_patch_path, reference_output_path,
+            augmentation_number, mitosis_tile_size, num_parallel_calls,
+            prefectch, prob_thres, eps, min_samples, isWeightedAvg)
 
 def main(args):
-    #mitosis_input_dir = '../../../deep-histopath/data/mitoses/mitoses_train_image_data/'
-    #mitosis_reorganized_dir = '../../../deep-histopath/data/mitoses/mitoses_train_image_data_new/'
     config = ValConfig()
     if args.reorganize_folder_structure:
         print("1. Reorganize the data structure for Mask_RCNN")
         reorganize_mitosis_images(
             config.mitosis_input_dir, config.mitosis_reorganized_dir)
 
-    inference_input_dir = 'datasets/stage1_test'
     if args.split_big_images_to_small_ones:
         print("2. Crop big images into small ones")
         mitosis_files = \
             [str(f) for f in Path(config.mitosis_reorganized_dir)
                                  .glob('**/**/*.tif')]
-        crop_image(mitosis_files, config.inference_input_dir, size=128,
-                   overlap=16)
+        crop_image(mitosis_files, config.inference_input_dir,
+                   size=config.crop_image_size,
+                   overlap=config.crop_image_overlap)
 
-    command = 'detect'
-    dataset = 'datasets/'
-    weights = 'models/mask_rcnn_nucleus_0380.h5'
-    subset = 'stage1_test_val'
     if args.run_nucleus_detection:
         print("3. Run the nucleus segmentation inference")
-        config.inference_result_dir = \
-            nucleus_mitosis.run(config.command, config.dataset, config.weights,
-                                config.subset)
-        print("Inference result dir: ", config.inference_result_dir)
+        nucleus_mitosis.inference(config.inference_input_dir, config.weights,
+                                  config.maskrcnn_inference_result_dir)
+        print("Inference result dir: ", config.maskrcnn_inference_result_dir)
 
+    if args.combine_small_inference_results:
         print("4. Combine small inference images and csvs to big ones")
-        combine_images(config.inference_result_dir,
-                       config.inference_combine_result)
-        combine_csvs(config.inference_result_dir,
-                     config.inference_combine_result, clean_output_dir=False)
+        combine_images(config.maskrcnn_inference_result_dir,
+                       config.maskrcnn_inference_combined_result,
+                       size=config.crop_image_size)
+        combine_csvs(config.maskrcnn_inference_result_dir,
+                     config.maskrcnn_inference_combined_result,
+                     clean_output_dir=False)
 
-    ground_truth_dir = '../../../deep-histopath/data/mitoses/mitoses_train_ground_truth'
     if args.visualize_the_ground_truth:
         print("5. Visualize the ground truth masks")
-        add_groundtruth_mark(config.inference_combine_result, ground_truth_dir, hasHeader=False, shape=Shape.CIRCLE)
+        add_groundtruth_mark(config.maskrcnn_inference_combined_result,
+                             config.ground_truth_dir, hasHeader=False,
+                              shape=Shape.CIRCLE)
         # add_mark('/Users/fei/Documents/Github/Mask_RCNN/samples/nucleus/datasets/stage1_combine_test/01-01.png',
         #          '/Users/fei/Documents/Github/Mask_RCNN/samples/nucleus/datasets/stage1_combine_test/01-01.csv',
         #          hasHeader=True, shape=Shape.CIRCLE, mark_color=(255,0,0,50))
 
-    inference_dir = "datasets/stage1_combine_test/"
-    ground_truth_dir = "../../../deep-histopath/data/mitoses/mitoses_train_ground_truth"
     if args.evaluate_nucleus_inference:
         print("6. Evaluate the nucleus inference result")
-        check_nucleius_inference(inference_dir, ground_truth_dir)
+        check_nucleius_inference(config.maskrcnn_inference_combined_result,
+                                 config.ground_truth_dir)
 
-    img_dir = '../../../deep-histopath/data/mitoses/mitoses_train_image_data/'
-    location_csv_dir = 'datasets/stage1_combine_test/'
-    output_patch_basedir = 'datasets/sample_patches'
-    if args.extract_patch:
+    if args.extract_nucleus_patch:
         print("7. Extract patches according to the inference result")
-        extract_patches(img_dir, location_csv_dir, output_patch_basedir)
+        extract_patches(config.mitosis_input_dir,
+                        config.maskrcnn_inference_combined_result,
+                        config.extracted_nucleus_dir,
+                        patch_size=config.mitosis_patch_size)
 
-    input_dir_basepath = 'datasets/sample_patches/'
-    output_dir_basepath = 'datasets/inference_results/'
-    model_file = '../../../deep-histopath/experiments/models/deep_histopath_model.hdf5'
     if args.run_mitosis_classification:
         print("8. Run mitosis classification inference")
         batch_size = 128
-        num_parallel_calls = 1
+        num_parallel_calls = 8
         prob_thres = 0.5,
         eps = 64
         min_samples = 1
         isWeightedAvg = False
-        run_reference_in_batch(
+        run_mitosis_classification_in_batch(
             batch_size=batch_size,
-            input_dir_basepath=input_dir_basepath,
-            output_dir_basepath=output_dir_basepath,
-            model_file=model_file,
-            num_parallel_calls=num_parallel_calls,
+            input_dir_basepath=config.extracted_nucleus_dir,
+            output_dir_basepath=config.mitosis_classification_result_dir,
+            model_file=config.mitosis_classification_model_file,
+            augmentation_number=config.augmentation_number,
+            mitosis_tile_size= config.mitosis_tile_size,
+            num_parallel_calls=config.mitosis_classification_num_parallel_calls,
+            prefectch=config.mitosis_classification_prefetch,
             prob_thres=prob_thres,
             eps=eps,
             min_samples=min_samples,
             isWeightedAvg=isWeightedAvg)
 
-    output_dir_basepath = 'datasets/val_results/'
-    ground_truth_dir = "../../../deep-histopath/data/mitoses/val_ground_truth"
     if args.compute_f1:
         print("9. Compute F1 score")
         f1, precision, recall, over_detected, non_detected, FP, TP, FN = \
-            evaluate_global_f1(output_dir_basepath, ground_truth_dir, threshold=30,
+            evaluate_global_f1(config.mitosis_classification_result_dir,
+                               config.ground_truth_dir,
+                               threshold=30,
                                prob_threshold=None)
         print("F1: {} \n"
               "Precision: {} \n"
@@ -477,8 +486,8 @@ def main(args):
               "Non_detected: {} \n"
               "FP: {} \n"
               "TP: {} \n"
-              "FN: {} \n".format(f1, precision, recall, over_detected, non_detected,
-                                 FP, TP, FN))
+              "FN: {} \n".format(f1, precision, recall, over_detected,
+                                 non_detected, FP, TP, FN))
 
 if __name__ == '__main__':
     import argparse
@@ -506,9 +515,10 @@ if __name__ == '__main__':
                                             "result to see how many detected "
                                             "nuclei are overlapped with the "
                                             "ground truth mitoses")
-    parser.add_argument("--extract_patch", required=False, default=False, action="store_true",
-                        help="Extract the patches from the big image based on "
-                             "the queried coordinates")
+    parser.add_argument("--extract_nucleus_patch", required=False, default=False,
+                        action="store_true", help="Extract the patches from the "
+                                                  "big image based on the "
+                                                  "queried coordinates")
     parser.add_argument("--run_mitosis_classification", required=False, action="store_true",
                         default=False, help="Run the mitosis detection model to"
                                             "classify if the input image is a "
