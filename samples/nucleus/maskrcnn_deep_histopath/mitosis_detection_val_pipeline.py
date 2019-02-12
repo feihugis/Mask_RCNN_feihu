@@ -294,7 +294,7 @@ def run_inference(model,
     input_file_paths = [str(f) for f in Path(input_dir_path).glob('*.png')]
     input_files = np.asarray(input_file_paths, dtype=np.str)
     steps = len(input_file_paths)
-    augmentation_size = 8
+    augmentation_size = 128
     patch_size = 64
 
     input_file_dataset = tf.data.Dataset.from_tensor_slices(input_files)
