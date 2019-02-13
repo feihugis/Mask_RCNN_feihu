@@ -4,6 +4,8 @@ import os
 import sys
 import shutil
 import logging
+import time
+import logging
 
 import numpy as np
 from pathlib import Path
@@ -515,6 +517,8 @@ def main(args):
 
 if __name__ == '__main__':
     import argparse
+    start_time = time.time()
+    logging.info("Start the job ")
 
     # Parse command line arguments
     parser = argparse.ArgumentParser(
@@ -558,6 +562,9 @@ if __name__ == '__main__':
                         help="Compute F1 score")
     args = parser.parse_args()
     main(args)
+    end_time = time.time() - start_time
+    print("This job took: {} seconds".format(end_time))
+    logging.info("This job took: {} seconds".format(end_time))
 
 
 
