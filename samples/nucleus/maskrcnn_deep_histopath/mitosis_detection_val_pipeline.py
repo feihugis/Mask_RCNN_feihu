@@ -71,6 +71,7 @@ class ValConfig(object):
     mitosis_classification_model_file = '../../../deep-histopath/experiments/models/deep_histopath_model.hdf5'
 
     # step_9
+    f1_prob_threshhold = 0.6
 
 
 # Root directory of the project
@@ -443,7 +444,7 @@ def main(args):
         print("4.1 Cluster the nucleus detection results")
         cluster_prediction_result(config.maskrcnn_inference_combined_result,
                                   eps=32, min_samples=1, hasHeader=True,
-                                  isWeightedAvg=False, prob_threshold=0.5)
+                                  isWeightedAvg=False, prob_threshold=0.8)
         for file_name in ["11-01", "11-02", "11-03", "12-01", "12-02", "12-03"]:
           add_mark(os.path.join(config.maskrcnn_inference_combined_result,
                                 "{}.png".format(file_name)),
@@ -501,7 +502,7 @@ def main(args):
             evaluate_global_f1(config.mitosis_classification_result_dir,
                                config.ground_truth_dir,
                                threshold=30,
-                               prob_threshold=None)
+                               prob_threshold=config.f1_prob_threshhold)
         print("F1: {} \n"
               "Precision: {} \n"
               "Recall: {} \n"
@@ -509,8 +510,8 @@ def main(args):
               "Non_detected: {} \n"
               "FP: {} \n"
               "TP: {} \n"
-              "FN: {} \n".format(f1, precision, recall, over_detected,
-                                 non_detected, FP, TP, FN))
+              "FN: {} \n".format(f1, precision, recall, len(over_detected),
+                                 len(non_detected), len(FP), len(TP), len(FN)))
 
 if __name__ == '__main__':
     import argparse
