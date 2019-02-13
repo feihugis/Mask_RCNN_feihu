@@ -11,7 +11,7 @@ from shutil import copyfile
 from deephistopath.evaluation import add_ground_truth_mark_help
 from deephistopath.visualization import Shape
 from deephistopath.evaluation import get_locations_from_csv, evaluate_global_f1
-from deephistopath.detection import tuple_2_csv, dbscan_clustering
+from deephistopath.detection import tuple_2_csv, dbscan_clustering, cluster_prediction_result
 from samples.nucleus import nucleus_mitosis
 import tensorflow as tf
 
@@ -41,6 +41,14 @@ class ValConfig(object):
     maskrcnn_inference_combined_result = \
         'datasets/val_maskrcnn_combined_inference_result/'
 
+    # The dir of cluster result is hard coded inside function
+    # `cluster_prediction_result()`.
+    maskrcnn_inference_combined_clusterd_result = \
+      "datasets/val_maskrcnn_combined_inference_result_clustered/"
+    # Indicate whether the output csv file has the prediction probability
+    # column.
+    hasProb = True
+
     # step_5
     ground_truth_dir = '../../../deep-histopath/data/mitoses/val_ground_truth'
 
@@ -63,7 +71,6 @@ class ValConfig(object):
     mitosis_classification_model_file = '../../../deep-histopath/experiments/models/deep_histopath_model.hdf5'
 
     # step_9
-    ground_truth_dir = "../../../deep-histopath/data/mitoses/val_ground_truth"
 
 
 # Root directory of the project
@@ -163,28 +170,31 @@ def combine_images(input_dir, output_dir, size, clean_output_dir=False):
                     0:combined_file_size[basename][0],
                     0:combined_file_size[basename][1], :])
 
-def combine_csvs(input_dir, output_dir, hasHeader=True, clean_output_dir=False):
+def combine_csvs(input_dir, output_dir, hasHeader=True, hasProb=True,
+                 clean_output_dir=False):
     if clean_output_dir:
         shutil.rmtree(output_dir)
     input_files = [str(f) for f in Path(input_dir).glob('**/**/*.csv')]
     combine_csvs = {}
     for input_file in input_files:
         points = get_locations_from_csv(input_file, hasHeader=hasHeader,
-                                     hasProb=False)
-        basename, y, x = os.path.basename(input_file).split('.')[0].split("_")
+                                     hasProb=hasProb)
+        basename, y_offset, x_offset = \
+            os.path.basename(input_file).split('.')[0].split("_")
         if not basename in combine_csvs:
             combine_csvs[basename] = []
-        y = int(y)
-        x = int(x)
+        y_offset = int(y_offset)
+        x_offset = int(x_offset)
         for i in range(len(points)):
-            points[i] = (points[i][0]+y, points[i][1]+x)
+            points[i] = \
+                (points[i][0] + y_offset, points[i][1] + x_offset, points[i][2])
         combine_csvs[basename].extend(points)
 
     os.makedirs(output_dir, exist_ok=True)
     for combined_csv in combine_csvs:
         tuple_2_csv(combine_csvs[combined_csv],
                     os.path.join(output_dir, combined_csv) + '.csv',
-                    columns=['Y', 'X'])
+                    columns=['Y', 'X', 'prob'])
 
 def add_groundtruth_mark(im_dir, ground_truth_dir, hasHeader=False, shape=Shape.CROSS,
                          mark_color=(0, 255, 127, 200), hasProb=False):
@@ -427,13 +437,26 @@ def main(args):
                        size=config.crop_image_size)
         combine_csvs(config.maskrcnn_inference_result_dir,
                      config.maskrcnn_inference_combined_result,
-                     clean_output_dir=False)
+                     hasProb=config.hasProb, clean_output_dir=False)
+
+    if args.cluster_nucleus_detection_results:
+        print("4.1 Cluster the nucleus detection results")
+        cluster_prediction_result(config.maskrcnn_inference_combined_result,
+                                  eps=32, min_samples=1, hasHeader=True,
+                                  isWeightedAvg=False, prob_threshold=0.5)
+        for file_name in ["11-01", "11-02", "11-03", "12-01", "12-02", "12-03"]:
+          add_mark(os.path.join(config.maskrcnn_inference_combined_result,
+                                "{}.png".format(file_name)),
+                   os.path.join(config.maskrcnn_inference_combined_clusterd_result,
+                                "{}.csv".format(file_name)),
+                   hasHeader=True, shape=Shape.SQUARE,
+                   mark_color=(255, 100, 100, 200))
 
     if args.visualize_the_ground_truth:
         print("5. Visualize the ground truth masks")
         add_groundtruth_mark(config.maskrcnn_inference_combined_result,
                              config.ground_truth_dir, hasHeader=False,
-                              shape=Shape.CIRCLE)
+                             shape=Shape.CIRCLE)
         # add_mark('/Users/fei/Documents/Github/Mask_RCNN/samples/nucleus/datasets/stage1_combine_test/01-01.png',
         #          '/Users/fei/Documents/Github/Mask_RCNN/samples/nucleus/datasets/stage1_combine_test/01-01.csv',
         #          hasHeader=True, shape=Shape.CIRCLE, mark_color=(255,0,0,50))
@@ -507,6 +530,13 @@ if __name__ == '__main__':
                         default=False, help="Combine the inference results (csv "
                                             "and image) as the whole result for "
                                             "the big image")
+    parser.add_argument("--cluster_nucleus_detection_results", required=False, action="store_true",
+                        default=False, help="The detected nucleus might be much "
+                                            "smaller than the predefiend "
+                                            "mitosis tile size (64), so the "
+                                            "detected nuclei could be clustered "
+                                            "and the center point can be used "
+                                            "to extract the potential mitosis.")
     parser.add_argument("--visualize_the_ground_truth", required=False, action="store_true",
                         default=False, help="Visualize the ground truth data on "
                                             "the big image")
