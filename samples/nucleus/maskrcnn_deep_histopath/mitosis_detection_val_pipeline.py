@@ -60,9 +60,9 @@ class ValConfig(object):
     # the mitosis patch should be bigger than mitosis tile as the patch will be
     # augmented (e.g. rotation) and crop into the mitosis tile.
     mitosis_patch_size = 72
-    augmentation_number = 8
+    augmentation_number = 64
     mitosis_tile_size = 64
-    mitosis_classification_prefetch = 32  # parameter for tf.dataset.prefetch
+    mitosis_classification_prefetch = 512  # parameter for tf.dataset.prefetch
     mitosis_classification_num_parallel_calls = 8  # parameter for tf.dataset.map
 
     # step_8
@@ -71,7 +71,7 @@ class ValConfig(object):
     mitosis_classification_model_file = '../../../deep-histopath/experiments/models/deep_histopath_model.hdf5'
 
     # step_9
-    f1_prob_threshhold = 0.6
+    f1_prob_threshhold = 0.8
 
 
 # Root directory of the project
