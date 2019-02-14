@@ -324,7 +324,15 @@ def run_mitosis_classification(model,
         .map(lambda img: normalize(img, "resnet_custom"),
              num_parallel_calls=num_parallel_calls)\
         .prefetch(prefetch)
-        #.batch(batch_size=batch_size)
+
+    if augmentation_number == 1:
+      img_dataset = img_dataset\
+        .map(lambda img: normalize(img, "resnet_custom"),
+             num_parallel_calls=num_parallel_calls)\
+        .batch(batch_size)\
+        .prefetch(prefetch)
+      steps = math.floor(len(input_file_paths) / batch_size) + 1
+
     img_iterator = img_dataset.make_one_shot_iterator()
     next_batch = img_iterator.get_next()
 
@@ -402,12 +410,12 @@ def run_mitosis_classification_in_batch(batch_size,
     model, sess = load_model(model_file)
     for input_patch_dir in input_patch_dirs:
         print("Run the inference on {} ......".format(input_patch_dir))
-        input_patch_path = Path(input_patch_dir)
-        subfolder = os.path.join(input_patch_path.parent.name,
-                                 input_patch_path.name)
-        reference_output_path = os.path.join(output_dir_basepath, subfolder)
+        input_patch_dir = Path(input_patch_dir)
+        subfolder = os.path.join(input_patch_dir.parent.name,
+                                 input_patch_dir.name)
+        reference_output_dir = os.path.join(output_dir_basepath, subfolder)
         run_mitosis_classification(
-            model, sess, batch_size, input_patch_path, reference_output_path,
+            model, sess, batch_size, input_patch_dir, reference_output_dir,
             augmentation_number, mitosis_tile_size, num_parallel_calls,
             prefectch, prob_thres, eps, min_samples, isWeightedAvg)
 
