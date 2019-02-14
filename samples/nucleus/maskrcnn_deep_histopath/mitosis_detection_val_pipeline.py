@@ -325,7 +325,9 @@ def run_mitosis_classification(model,
         .batch(batch_size)\
         .prefetch(prefetch)
       # Make sure all the files in the dataset are feeded into inference
-      steps = math.floor(len(input_file_paths) / batch_size) + 1
+      float_steps = len(input_file_paths) / batch_size
+      int_steps = len(input_file_paths) // batch_size
+      steps = math.ceil(float_steps) if float_steps > int_steps else int_steps
     else:
       img_dataset = img_dataset \
         .map(lambda img: create_augmented_batch(img, augmentation_number,
@@ -346,6 +348,11 @@ def run_mitosis_classification(model,
             pred_np = model.predict(next_batch, steps=steps)
             print("Shape: ", pred_np.shape)
         except tf.errors.OutOfRangeError:
+            print("Please check the steps parameter. steps = {}, "
+                  "batch_size = {}, input_tile_size = {}, "
+                  "augmentation_number = {}"
+                  .format(steps, batch_size, input_files.shape,
+                          augmentation_number))
             break
 
     prob_result = \
