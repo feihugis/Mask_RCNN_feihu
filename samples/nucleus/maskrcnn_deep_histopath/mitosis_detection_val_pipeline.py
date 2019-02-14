@@ -313,7 +313,6 @@ def run_mitosis_classification(model,
 
     input_file_paths = [str(f) for f in Path(input_dir_path).glob('*.png')]
     input_files = np.asarray(input_file_paths, dtype=np.str)
-    steps = len(input_file_paths)
 
     input_file_dataset = tf.data.Dataset.from_tensor_slices(input_files)
     img_dataset = input_file_dataset.map(lambda file: get_image_tf(file),
@@ -325,6 +324,7 @@ def run_mitosis_classification(model,
              num_parallel_calls=num_parallel_calls)\
         .batch(batch_size)\
         .prefetch(prefetch)
+      # Make sure all the files in the dataset are feeded into inference
       steps = math.floor(len(input_file_paths) / batch_size) + 1
     else:
       img_dataset = img_dataset \
@@ -334,6 +334,7 @@ def run_mitosis_classification(model,
         .map(lambda img: normalize(img, "resnet_custom"),
         num_parallel_calls=num_parallel_calls) \
         .prefetch(prefetch)
+      steps = len(input_file_paths)
 
     img_iterator = img_dataset.make_one_shot_iterator()
     next_batch = img_iterator.get_next()
@@ -344,13 +345,14 @@ def run_mitosis_classification(model,
         try:
             pred_np = model.predict(next_batch, steps=steps)
             print("Shape: ", pred_np.shape)
-            #pred_np = tf.reduce_mean(pred_np, axis=0, keepdims=True, name="avg_x")
-            prob_result = \
-                np.average(pred_np.reshape(-1, augmentation_number), axis=1)
-            #prob_result = np.concatenate((prob_result, pred_np), axis=0)
         except tf.errors.OutOfRangeError:
-            print("prediction result size: {}".format(prob_result.shape))
             break
+
+    prob_result = \
+      np.average(pred_np.reshape(-1, augmentation_number), axis=1)
+
+    print("Finish the inference on {} with {} input tiles"
+      .format(input_dir_path, prob_result.shape))
 
     assert prob_result.shape[0] == input_files.shape[0]
     mitosis_probs = prob_result[prob_result > prob_thres]
