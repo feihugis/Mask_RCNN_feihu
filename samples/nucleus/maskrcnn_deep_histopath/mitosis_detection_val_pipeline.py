@@ -318,12 +318,6 @@ def run_mitosis_classification(model,
     input_file_dataset = tf.data.Dataset.from_tensor_slices(input_files)
     img_dataset = input_file_dataset.map(lambda file: get_image_tf(file),
                                          num_parallel_calls=1)
-    img_dataset = img_dataset\
-        .map(lambda img: create_augmented_batch(img, augmentation_number, mitosis_tile_size),
-             num_parallel_calls=num_parallel_calls)\
-        .map(lambda img: normalize(img, "resnet_custom"),
-             num_parallel_calls=num_parallel_calls)\
-        .prefetch(prefetch)
 
     if augmentation_number == 1:
       img_dataset = img_dataset\
@@ -332,6 +326,14 @@ def run_mitosis_classification(model,
         .batch(batch_size)\
         .prefetch(prefetch)
       steps = math.floor(len(input_file_paths) / batch_size) + 1
+    else:
+      img_dataset = img_dataset \
+        .map(lambda img: create_augmented_batch(img, augmentation_number,
+        mitosis_tile_size),
+        num_parallel_calls=num_parallel_calls) \
+        .map(lambda img: normalize(img, "resnet_custom"),
+        num_parallel_calls=num_parallel_calls) \
+        .prefetch(prefetch)
 
     img_iterator = img_dataset.make_one_shot_iterator()
     next_batch = img_iterator.get_next()
