@@ -12,7 +12,7 @@ from pathlib import Path
 from shutil import copyfile
 from deephistopath.evaluation import add_ground_truth_mark_help
 from deephistopath.visualization import Shape
-from deephistopath.evaluation import get_locations_from_csv, evaluate_global_f1
+from deephistopath.evaluation import get_locations_from_csv, evaluate_global_f1, get_data_from_csv
 from deephistopath.detection import tuple_2_csv, dbscan_clustering, cluster_prediction_result
 from samples.nucleus import nucleus_mitosis
 import tensorflow as tf
@@ -24,44 +24,44 @@ from preprocess_mitoses import gen_patches
 from preprocess_mitoses import save_patch
 from eval_mitoses import evaluate
 
-class ValConfig(object):
+class TrainConfig(object):
     # step_1: Reorganize the data structure for Mask_RCNN
-    mitosis_input_dir = '../../../deep-histopath/data/mitoses/val_image_data/'
-    mitosis_reorganized_dir = '../../../deep-histopath/data/mitoses/val_image_data_new/'
+    mitosis_input_dir = '../../../deep-histopath/data/mitoses/mitoses_train_image_data/'
+    mitosis_reorganized_dir = '../../../deep-histopath/data/mitoses/mitoses_train_image_data_new/'
 
     # step_2: Crop big images into small ones.
     # TODO: Currently this value needs to be hard-coded.
-    inference_input_dir = 'datasets/val_crop_images'
+    inference_input_dir = 'datasets/mitoses_train_image_data_cropped'
     crop_image_size = 512
     crop_image_overlap = 16
 
     # step_3: Run the nucleus segmentation inference
     weights = 'models/mask_rcnn_nucleus_0380.h5'
-    maskrcnn_inference_result_dir = 'datasets/val_maskrcnn_inference_result'
+    maskrcnn_inference_result_dir = 'datasets/mitoses_train_maskrcnn_inference_result'
 
     # step_4
     maskrcnn_inference_combined_result = \
-        'datasets/val_maskrcnn_combined_inference_result/'
+        'datasets/mitoses_train_maskrcnn_inference_result_combined/'
 
     # The dir of cluster result is hard coded inside function
     # `cluster_prediction_result()`.
     maskrcnn_inference_combined_clusterd_result = \
-      "datasets/val_maskrcnn_combined_inference_result_clustered/"
+      "datasets/mitoses_train_maskrcnn_inference_result_combined_clustered/"
     # Indicate whether the output csv file has the prediction probability
     # column.
     hasProb = True
 
     # step_5
-    ground_truth_dir = '../../../deep-histopath/data/mitoses/val_ground_truth'
+    ground_truth_dir = '../../../deep-histopath/data/mitoses//mitoses_train_ground_truth'
 
     # step_6
     inference_dir = "datasets/stage1_combine_test_val/"
 
     # step_7
-    extracted_nucleus_dir = 'datasets/val_extracted_nucleus_patches'
+    extracted_normal_mitosis_patch_dir = 'datasets/train_extracted_normal_mitosis_patches'
     # the mitosis patch should be bigger than mitosis tile as the patch will be
     # augmented (e.g. rotation) and crop into the mitosis tile.
-    mitosis_patch_size = 72
+    mitosis_patch_size = 64
     augmentation_number = 1
     mitosis_tile_size = 64
     mitosis_classification_prefetch = 512  # parameter for tf.dataset.prefetch
@@ -245,35 +245,80 @@ def check_nucleius_inference(inference_dir, ground_truth_dir):
         total_count, matched_count))
 
 
-def extract_patches(img_dir, location_csv_dir, output_patch_basedir,
+def label_detected_nucleus(nucleus_dir, ground_truth_dir):
+    ground_truth_csvs = [str(f) for f in Path(ground_truth_dir).glob('*/*.csv')]
+    matched_count = 0
+    total_count = 0
+    label_output = []
+    for ground_truth_csv in ground_truth_csvs:
+        ground_truth_dir, base = os.path.split(ground_truth_csv)
+        sub_dir = os.path.split(ground_truth_dir)[1]
+        inference_csv = os.path.join(nucleus_dir, "{}-{}".format(sub_dir, base))
+        label_csv = os.path.join(nucleus_dir,
+          "label-{}-{}".format(sub_dir, base))
+        ground_truth_locations = get_locations_from_csv(
+            ground_truth_csv, hasHeader=False, hasProb=False)
+        inference_locations = get_locations_from_csv(
+            inference_csv, hasHeader=True, hasProb=True)
+        label_output.clear()
+        for (y1, x1, prob) in inference_locations:
+          inside = False
+          for (y2, x2) in ground_truth_locations:
+            if is_inside(x1, y1, x2, y2, 32):
+              inside = True
+              label_output.append((y1, x1, prob, True))
+              break
+          if not inside:
+            label_output.append((y1, x1, prob, False))
+        print(len(label_output), len(inference_locations))
+        assert len(label_output) == len(inference_locations)
+        tuple_2_csv(label_output, label_csv, ['Y', 'X', 'prob', 'is_mitosis'])
+
+def gen_mitosis_normal_titles(img_dir, location_csv_dir, output_patch_basedir,
                     patch_size=64):
-    location_csv_files = [str(f) for f in Path(location_csv_dir).glob('*.csv')]
+    normal_count = 0
+    mitosis_count = 0
+    location_csv_files = [str(f) for f in Path(location_csv_dir).glob('label-*.csv')]
     if len(location_csv_files) == 0:
         raise ValueError(
             "Please check the input dir for the location csv files.")
 
     for location_csv_file in location_csv_files:
         print("Processing {} ......".format(location_csv_file))
-        points = get_locations_from_csv(location_csv_file, hasHeader=True,
-                                        hasProb=False)
+        points = get_data_from_csv(location_csv_file, hasHeader=True)
+        if len(points) == 0:
+          raise ValueError("No data found, please check the input file {}"
+            .format(location_csv_file))
+        if len(points[0]) != 4:
+          raise ValueError("Please check the data schema which should have 4 "
+                           "columns")
         # Get the image file name.
         subfolder = os.path.basename(location_csv_file) \
+            .replace('label-', '') \
             .replace('-', '/') \
             .replace('.csv', '')
+        case, region = subfolder.split('/')
         img_file = os.path.join(img_dir, "{}.tif".format(subfolder))
         print("Processing {} ......".format(img_file))
         img = cv2.imread(img_file)
         img = np.asarray(img)[:, :, ::-1]
 
-        output_patch_dir = os.path.join(output_patch_basedir, subfolder)
-        if not os.path.exists(output_patch_dir):
-            os.makedirs(output_patch_dir, exist_ok=True)
+        for (row, col, prob, is_mitosis) in points:
+            output_patch_dir = os.path.join(output_patch_basedir,
+                                            'mitosis' if is_mitosis else 'normal')
+            if not os.path.exists(output_patch_dir):
+              os.makedirs(output_patch_dir, exist_ok=True)
 
-        for (row, col) in points:
             patch = extract_patch(img, row, col, patch_size)
-            save_patch(patch, path=output_patch_dir, lab=0, case=0, region=0,
-                row=row, col=col, rotation=0, row_shift=0, col_shift=0,
-                suffix=0, ext="png")
+            save_patch(patch, path=output_patch_dir, lab=0, case=case,
+                       region=region, row=row, col=col, rotation=0, row_shift=0,
+                       col_shift=0, suffix=0, ext="png")
+            if is_mitosis:
+              mitosis_count += 1
+            else:
+              normal_count += 1
+        print("Extract {} mitoses and {} normal titles".format(mitosis_count,
+                                                               normal_count))
 
 def get_image_tf(filename):
   """Get image from filename.
@@ -431,7 +476,7 @@ def run_mitosis_classification_in_batch(batch_size,
             prefectch, prob_thres, eps, min_samples, isWeightedAvg)
 
 def main(args):
-    config = ValConfig()
+    config = TrainConfig()
     if args.reorganize_folder_structure:
         print("1. Reorganize the data structure for Mask_RCNN")
         reorganize_mitosis_images(
@@ -466,13 +511,13 @@ def main(args):
         cluster_prediction_result(config.maskrcnn_inference_combined_result,
                                   eps=32, min_samples=1, hasHeader=True,
                                   isWeightedAvg=False, prob_threshold=0.8)
-        for file_name in ["11-01", "11-02", "11-03", "12-01", "12-02", "12-03"]:
-          add_mark(os.path.join(config.maskrcnn_inference_combined_result,
-                                "{}.png".format(file_name)),
-                   os.path.join(config.maskrcnn_inference_combined_clusterd_result,
-                                "{}.csv".format(file_name)),
-                   hasHeader=True, shape=Shape.SQUARE,
-                   mark_color=(255, 100, 100, 200))
+        # for file_name in ["11-01", "11-02", "11-03", "12-01", "12-02", "12-03"]:
+        #   add_mark(os.path.join(config.maskrcnn_inference_combined_result,
+        #                         "{}.png".format(file_name)),
+        #            os.path.join(config.maskrcnn_inference_combined_clusterd_result,
+        #                         "{}.csv".format(file_name)),
+        #            hasHeader=True, shape=Shape.SQUARE,
+        #            mark_color=(255, 100, 100, 200))
 
     if args.visualize_the_ground_truth:
         print("5. Visualize the ground truth masks")
@@ -488,12 +533,18 @@ def main(args):
         check_nucleius_inference(config.maskrcnn_inference_combined_result,
                                  config.ground_truth_dir)
 
-    if args.extract_nucleus_patch:
-        print("7. Extract patches according to the inference result")
-        extract_patches(config.mitosis_input_dir,
-                        config.maskrcnn_inference_combined_result,
-                        config.extracted_nucleus_dir,
-                        patch_size=config.mitosis_patch_size)
+    if args.label_detected_nucleus:
+        print("7. Label the detected nucleus as mitosis or not based on the "
+              "ground truth")
+        label_detected_nucleus(config.maskrcnn_inference_combined_result,
+                               config.ground_truth_dir)
+
+    if args.gen_mitosis_normal_tile:
+        print("8. Generate the mitosis and normal tiles based on the label csv")
+        gen_mitosis_normal_titles(config.mitosis_input_dir,
+                                  config.maskrcnn_inference_combined_result,
+                                  config.extracted_normal_mitosis_patch_dir,
+                                  patch_size=config.mitosis_patch_size)
 
     if args.run_mitosis_classification:
         print("8. Run mitosis classification inference")
@@ -569,10 +620,19 @@ if __name__ == '__main__':
                                             "result to see how many detected "
                                             "nuclei are overlapped with the "
                                             "ground truth mitoses")
-    parser.add_argument("--extract_nucleus_patch", required=False, default=False,
+    parser.add_argument("--label_detected_nucleus", required=False,
+                         action="store_true", default=False,
+                         help="Add a label for the detected nuclei based on "
+                              "the ground truth data: True means the detected "
+                              "nucleus is a motosis; False means it is not a "
+                              "motosis")
+
+    parser.add_argument("--gen_mitosis_normal_tile", required=False, default=False,
                         action="store_true", help="Extract the patches from the "
-                                                  "big image based on the "
-                                                  "queried coordinates")
+                                                  "train images based on the "
+                                                  "input coordinates and split "
+                                                  "the data into mitosis and "
+                                                  "normal forlder")
     parser.add_argument("--run_mitosis_classification", required=False, action="store_true",
                         default=False, help="Run the mitosis detection model to"
                                             "classify if the input image is a "
