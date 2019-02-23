@@ -67,6 +67,9 @@ class TrainConfig(object):
     mitosis_classification_prefetch = 512  # parameter for tf.dataset.prefetch
     mitosis_classification_num_parallel_calls = 8  # parameter for tf.dataset.map
 
+    val_cases = [11, 12, 15, 21, 22, 26, 29, 35, 40, 43, 51, 54, 60, 65, 68]
+    classification_model_dir = "classification_model_dir"
+
     # step_8
     input_dir_basepath = 'datasets/sample_patches/'
     mitosis_classification_result_dir = 'datasets/val_mitosis_classification_result/'
@@ -475,6 +478,45 @@ def run_mitosis_classification_in_batch(batch_size,
             augmentation_number, mitosis_tile_size, num_parallel_calls,
             prefectch, prob_thres, eps, min_samples, isWeightedAvg)
 
+def split_train_val_datasets(input_dir, val_cases):
+  mitosis_dir = os.path.join(input_dir, 'mitosis')
+  normal_dir = os.path.join(input_dir, 'normal')
+
+  train_dir = os.path.join(input_dir, 'train')
+  train_mitosis_dir = os.path.join(train_dir, 'mitosis')
+  train_normal_dir = os.path.join(train_dir, 'normal')
+  os.makedirs(train_mitosis_dir, exist_ok=True)
+  os.makedirs(train_normal_dir, exist_ok=True)
+
+  val_dir = os.path.join(input_dir, 'val')
+  val_mitosis_dir = os.path.join(val_dir, 'mitosis')
+  val_normal_dir = os.path.join(val_dir, 'normal')
+  os.makedirs(val_mitosis_dir, exist_ok=True)
+  os.makedirs(val_normal_dir, exist_ok=True)
+
+  mitosis_files = [str(f) for f in Path(mitosis_dir).glob('*.png')]
+  normal_files = [str(f) for f in Path(normal_dir).glob('*.png')]
+
+  for mitosis_file in mitosis_files:
+    is_val = False
+    for val_case in val_cases:
+      if mitosis_file.startswith("0-{:0>2d}".format(val_case)):
+        shutil.copy(mitosis_file, val_mitosis_dir)
+        is_val = True
+        break
+    if not is_val:
+      shutil.copy(mitosis_file, train_mitosis_dir)
+
+  for normal_file in normal_files:
+    is_val = False
+    for val_case in val_cases:
+      if normal_file.startswith("0-{:0>2d}".format(val_case)):
+        shutil.copy(normal_file, val_normal_dir)
+        is_val = True
+        break
+    if not is_val:
+      shutil.copy(normal_file, train_normal_dir)
+
 def main(args):
     config = TrainConfig()
     if args.reorganize_folder_structure:
@@ -545,6 +587,20 @@ def main(args):
                                   config.maskrcnn_inference_combined_result,
                                   config.extracted_normal_mitosis_patch_dir,
                                   patch_size=config.mitosis_patch_size)
+    if args.split_train_val_datasets:
+        print("9. Split the datasets into train and validation folders")
+        split_train_val_datasets(config.extracted_normal_mitosis_patch_dir,
+                                 config.val_cases)
+
+    if args.train_model:
+        train_path = os.path.join(config.extracted_normal_mitosis_patch_dir, 'train')
+        val_path = os.path.join(config.extracted_normal_mitosis_patch_dir, 'val')
+        exp_path = config.classification_model_dir
+        os.makedirs(exp_path, exist_ok=True)
+        model_name = 'resnet_custom'
+        model_weights = config.mitosis_classification_model_file
+        patch_size = 64
+        train_batch_size = 128
 
     if args.run_mitosis_classification:
         print("8. Run mitosis classification inference")
@@ -633,6 +689,11 @@ if __name__ == '__main__':
                                                   "input coordinates and split "
                                                   "the data into mitosis and "
                                                   "normal forlder")
+
+    parser.add_argument("--split_train_val_datasets", required=False,
+                        default=False, action="store_true",
+                        help="Split the tiles into train and validation folers")
+
     parser.add_argument("--run_mitosis_classification", required=False, action="store_true",
                         default=False, help="Run the mitosis detection model to"
                                             "classify if the input image is a "
