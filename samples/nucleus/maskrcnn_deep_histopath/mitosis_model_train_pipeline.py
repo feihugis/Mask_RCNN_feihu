@@ -500,7 +500,7 @@ def split_train_val_datasets(input_dir, val_cases):
   for mitosis_file in mitosis_files:
     is_val = False
     for val_case in val_cases:
-      if mitosis_file.startswith("0-{:0>2d}".format(val_case)):
+      if mitosis_file.find("0_{:0>2d}".format(val_case)) != -1:
         shutil.copy(mitosis_file, val_mitosis_dir)
         is_val = True
         break
@@ -510,7 +510,7 @@ def split_train_val_datasets(input_dir, val_cases):
   for normal_file in normal_files:
     is_val = False
     for val_case in val_cases:
-      if normal_file.startswith("0-{:0>2d}".format(val_case)):
+      if normal_file.find("0_{:0>2d}".format(val_case)) != -1:
         shutil.copy(normal_file, val_normal_dir)
         is_val = True
         break
